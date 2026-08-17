@@ -2,14 +2,9 @@ import QtQuick
 import QtQuick.Shapes
 import qs.Commons
 
-// A marca illithid: crânio em escudo com o queixo em ponta e quatro tentáculos
-// abrindo em leque. Vetor monocromático em caixa 1:1, na convenção do
-// TailscaleIcon e do DropboxIcon — herda a cor do tema e não traz asset.
-//
-// O símbolo de referência é entrelaçado (nós celtas nos tentáculos). Isso não
-// sobrevive a um slot de 16px, então aqui fica a silhueta: o que identifica um
-// mind flayer em tamanho pequeno é o crânio bulboso terminando em ponta somado
-// ao leque de tentáculos, não o ornamento.
+// Illithid mask inside a circular medallion, shared by the bar and PanelHero.
+// Diagonal negative-space eyes and four tentacles preserve the Mind Flayer
+// silhouette at very small sizes.
 Item {
   id: root
 
@@ -21,104 +16,85 @@ Item {
   implicitWidth: iconSize
   implicitHeight: iconSize
 
-  // O BarIconButton estica o componente pro canvas óptico real (16px) via
-  // Loader com anchors.fill — então o desenho usa o tamanho RENDERIZADO,
-  // não a propriedade. Assim a proporção casa com os ícones nativos
-  // (DropboxIcon desenha em função de root.width pelo mesmo motivo).
   readonly property real s: Math.min(width, height)
-  readonly property real tentacleStroke: Math.max(1, s * 0.085)
+  readonly property real originX: (width - s) / 2
+  readonly property real originY: (height - s) / 2
 
+  // Keep the same outer ring at every size for a consistent identity.
   Shape {
-    anchors.fill: parent
+    x: root.originX
+    y: root.originY
+    width: 100
+    height: 100
+    scale: root.s / 100
+    transformOrigin: Item.TopLeft
+
     antialiasing: true
     layer.enabled: true
     layer.samples: 4
     preferredRendererType: Shape.CurveRenderer
 
-    // Crânio: ombros largos no alto, lados retos convergindo para a ponta.
     ShapePath {
-      fillColor: root.color
-      strokeWidth: 0
+      fillColor: "transparent"
+      strokeColor: root.color
+      strokeWidth: 6
 
-      startX: root.s * 0.50
-      startY: root.s * 0.05
-
-      PathCubic {
-        x: root.s * 0.81; y: root.s * 0.30
-        control1X: root.s * 0.68; control1Y: root.s * 0.05
-        control2X: root.s * 0.81; control2Y: root.s * 0.15
+      PathSvg {
+        path: "M 50 14 C 69.9 14 86 30.1 86 50 C 86 69.9 69.9 86 50 86 " +
+              "C 30.1 86 14 69.9 14 50 C 14 30.1 30.1 14 50 14 Z"
       }
-      PathCubic {
-        x: root.s * 0.50; y: root.s * 0.61
-        control1X: root.s * 0.79; control1Y: root.s * 0.43
-        control2X: root.s * 0.62; control2Y: root.s * 0.53
-      }
-      PathCubic {
-        x: root.s * 0.19; y: root.s * 0.30
-        control1X: root.s * 0.38; control1Y: root.s * 0.53
-        control2X: root.s * 0.21; control2Y: root.s * 0.43
-      }
-      PathCubic {
-        x: root.s * 0.50; y: root.s * 0.05
-        control1X: root.s * 0.19; control1Y: root.s * 0.15
-        control2X: root.s * 0.32; control2Y: root.s * 0.05
-      }
-    }
-
-    // Tentáculos internos: curtos, saindo do queixo e abrindo pouco.
-    Tentacle {
-      x1: root.s * 0.44; y1: root.s * 0.57
-      cx1: root.s * 0.42; cy1: root.s * 0.74
-      cx2: root.s * 0.39; cy2: root.s * 0.85
-      x2: root.s * 0.32; y2: root.s * 0.94
-    }
-    Tentacle {
-      x1: root.s * 0.56; y1: root.s * 0.57
-      cx1: root.s * 0.58; cy1: root.s * 0.74
-      cx2: root.s * 0.61; cy2: root.s * 0.85
-      x2: root.s * 0.68; y2: root.s * 0.94
-    }
-
-    // Tentáculos externos: saem mais alto, varrem para fora e recolhem na ponta.
-    Tentacle {
-      x1: root.s * 0.28; y1: root.s * 0.47
-      cx1: root.s * 0.16; cy1: root.s * 0.62
-      cx2: root.s * 0.06; cy2: root.s * 0.74
-      x2: root.s * 0.14; y2: root.s * 0.90
-    }
-    Tentacle {
-      x1: root.s * 0.72; y1: root.s * 0.47
-      cx1: root.s * 0.84; cy1: root.s * 0.62
-      cx2: root.s * 0.94; cy2: root.s * 0.74
-      x2: root.s * 0.86; y2: root.s * 0.90
     }
   }
 
-  component Tentacle: ShapePath {
-    // ShapePath não é um Item: o PathCubic aninhado precisa do id, não de `parent`.
-    id: tentacle
+  IllithidGlyph {
+    x: root.originX + root.s * 0.22
+    y: root.originY + root.s * 0.22
+    scale: root.s * 0.56 / 100
+    transformOrigin: Item.TopLeft
+    glyphColor: root.color
+  }
 
-    property real x1: 0
-    property real y1: 0
-    property real cx1: 0
-    property real cy1: 0
-    property real cx2: 0
-    property real cy2: 0
-    property real x2: 0
-    property real y2: 0
+  component IllithidGlyph: Shape {
+    property color glyphColor: root.color
 
-    fillColor: "transparent"
-    strokeColor: root.color
-    strokeWidth: root.tentacleStroke
-    capStyle: ShapePath.RoundCap
+    width: 100
+    height: 100
+    antialiasing: true
+    layer.enabled: true
+    layer.samples: 4
+    preferredRendererType: Shape.CurveRenderer
 
-    startX: tentacle.x1
-    startY: tentacle.y1
+    // Four filled tentacles: two curved outer arms and two inner arms.
+    ShapePath {
+      fillColor: glyphColor
+      strokeWidth: 0
 
-    PathCubic {
-      x: tentacle.x2; y: tentacle.y2
-      control1X: tentacle.cx1; control1Y: tentacle.cy1
-      control2X: tentacle.cx2; control2Y: tentacle.cy2
+      PathSvg {
+        path: "M 38 43 C 29 49 17 55 11 66 C 5 77 8 90 18 94 " +
+              "C 24 97 31 93 31 87 C 25 90 20 88 19 83 " +
+              "C 17 75 25 68 40 61 Z " +
+              "M 62 43 C 71 49 83 55 89 66 C 95 77 92 90 82 94 " +
+              "C 76 97 69 93 69 87 C 75 90 80 88 81 83 " +
+              "C 83 75 75 68 60 61 Z " +
+              "M 44 49 C 39 62 37 78 34 91 C 32 97 39 99 43 94 " +
+              "C 47 82 48 67 49 55 Z " +
+              "M 56 49 C 61 62 63 78 66 91 C 68 97 61 99 57 94 " +
+              "C 53 82 52 67 51 55 Z"
+      }
+    }
+
+    // Tall skull with sharp eyes cut out through the odd-even fill rule.
+    ShapePath {
+      fillColor: glyphColor
+      strokeWidth: 0
+      fillRule: ShapePath.OddEvenFill
+
+      PathSvg {
+        path: "M 50 3 C 63 3 72 10 74 21 C 76 32 71 45 62 54 " +
+              "L 50 65 L 38 54 C 29 45 24 32 26 21 C 28 10 37 3 50 3 Z " +
+              "M 32 29 L 47 33 L 44 40 L 31 35 Z " +
+              "M 68 29 L 53 33 L 56 40 L 69 35 Z"
+      }
     }
   }
 }

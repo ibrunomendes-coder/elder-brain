@@ -1,105 +1,167 @@
 #!/usr/bin/env bash
-# install.sh — conecta esta máquina a um Elder Brain.
-# Interativo. Não grava nada fora de ~/.config/elder-brain e systemd user.
-set -euo pipefail
+# Interactive client-machine installer for Elder Brain.
+# Writes only to user-owned config, local binaries, systemd user units and
+# optional Claude Code / Omarchy configuration. No sudo required.
+set -Eeuo pipefail
 
-echo "🧠 Elder Brain — setup de máquina cliente"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+CONFIG_DIR="$HOME/.config/elder-brain"
+
+echo "🧠 Elder Brain — client machine setup"
 echo
 
-# --- 1. coleta -----------------------------------------------------------------
-read -rp "URL do servidor (ex.: http://100.x.y.z:49374): " URL
+# --- 1. Connection and canonical scope -----------------------------------------
+read -rp "Server URL (for example, http://<PRIVATE_IP>:49374): " URL
 URL="${URL%/}"
-read -rsp "Token (Bearer): " TOKEN; echo
-[ -n "$URL" ] && [ -n "$TOKEN" ] || { echo "URL e token são obrigatórios."; exit 1; }
+read -rsp "Bearer token: " TOKEN
+echo
+DEFAULT_SCOPE="default/$(id -un)"
+read -rp "Canonical scope [${DEFAULT_SCOPE}]: " SCOPE
+SCOPE="${SCOPE:-$DEFAULT_SCOPE}"
 
-# --- 2. config base -------------------------------------------------------------
-install -dm700 "$HOME/.config/elder-brain"
-printf '%s' "$TOKEN" > "$HOME/.config/elder-brain/token"
-printf '%s' "$URL"   > "$HOME/.config/elder-brain/url"
-chmod 600 "$HOME/.config/elder-brain"/{token,url}
-[ -f "$HOME/.config/elder-brain/machines" ] || hostname -s | tr 'A-Z' 'a-z' > "$HOME/.config/elder-brain/machines"
-echo "✓ config em ~/.config/elder-brain/"
+[[ "$SCOPE" == */* ]] || {
+  echo "Invalid scope; use workspace/project." >&2
+  exit 1
+}
+[[ -n "$URL" && -n "$TOKEN" ]] || {
+  echo "Server URL and token are required." >&2
+  exit 1
+}
+case "$URL" in
+  http://* | https://*) ;;
+  *) echo "Server URL must start with http:// or https://." >&2; exit 1 ;;
+esac
 
-# --- 3. teste -------------------------------------------------------------------
-CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 6 \
+# --- 2. Private local configuration --------------------------------------------
+install -dm700 "$CONFIG_DIR"
+printf '%s' "$TOKEN" > "$CONFIG_DIR/token"
+printf '%s' "$URL" > "$CONFIG_DIR/url"
+printf '%s' "$SCOPE" > "$CONFIG_DIR/scope"
+chmod 600 "$CONFIG_DIR"/{token,url,scope}
+
+if [[ ! -f "$CONFIG_DIR/machines" ]]; then
+  hostname -s | tr 'A-Z' 'a-z' > "$CONFIG_DIR/machines"
+fi
+chmod 600 "$CONFIG_DIR/machines"
+echo "✓ private config written to ~/.config/elder-brain/"
+
+# --- 3. Connectivity and authentication ----------------------------------------
+HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 6 \
   -H "Authorization: Bearer $TOKEN" "$URL/web/" || true)
-if [ "$CODE" = "401" ]; then echo "✗ token recusado (401). Confira e rode de novo."; exit 1; fi
-[ "$CODE" = "000" ] && { echo "✗ servidor inalcançável. Está na rede privada?"; exit 1; }
-echo "✓ servidor respondeu (HTTP $CODE)"
+if [[ "$HTTP_CODE" == 401 ]]; then
+  echo "✗ token rejected (HTTP 401); verify it and run the installer again." >&2
+  exit 1
+fi
+if [[ "$HTTP_CODE" == 000 ]]; then
+  echo "✗ server is unreachable; verify the private network and URL." >&2
+  exit 1
+fi
+echo "✓ server responded (HTTP $HTTP_CODE)"
 
-# --- 4. Claude Code (opcional) --------------------------------------------------
+# --- 4. Claude Code hooks (optional) -------------------------------------------
 HOOKS_DIR="$HOME/.local/share/ai-memory/hooks/claude-code"
-if [ -d "$HOOKS_DIR" ] && [ -f "$HOME/.claude/settings.json" ]; then
-  read -rp "Apontar hooks do Claude Code pro Elder Brain? [s/N] " R
-  if [ "$R" = "s" ] || [ "$R" = "S" ]; then
-    cp "$HOME/.claude/settings.json" "$HOME/.claude/settings.json.bak.$(date +%s)"
-    TOKEN_PATH="$HOME/.config/elder-brain/token" \
-    python3 - "$URL" <<'PYEOF'
-import json, os, sys
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+if [[ -d "$HOOKS_DIR" && -f "$CLAUDE_SETTINGS" ]]; then
+  read -rp "Point detected Claude Code ai-memory hooks to Elder Brain? [y/N] " REPLY
+  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+    backup="$CLAUDE_SETTINGS.bak.$(date +%s)"
+    cp -a "$CLAUDE_SETTINGS" "$backup"
+    TOKEN_PATH="$CONFIG_DIR/token" python3 - "$URL" "$CLAUDE_SETTINGS" <<'PYEOF'
+import json
+import os
+import shlex
+import stat
+import sys
+from pathlib import Path
+
 url = sys.argv[1]
+settings_path = Path(sys.argv[2])
 token_path = os.environ["TOKEN_PATH"]
-p = os.path.expanduser("~/.claude/settings.json")
-d = json.load(open(p))
-n = 0
-for group in d.get("hooks", {}).values():
+data = json.loads(settings_path.read_text())
+replacement = (
+    f"AI_MEMORY_HOOK_URL={shlex.quote(url)} "
+    f"AI_MEMORY_AUTH_TOKEN=$(cat {shlex.quote(token_path)})"
+)
+changed = 0
+for group in data.get("hooks", {}).values():
     for entry in group:
-        for h in entry.get("hooks", []):
-            cmd = h.get("command", "")
-            if "AI_MEMORY_HOOK_URL=http://127.0.0.1:49374" in cmd:
-                h["command"] = cmd.replace(
-                    "AI_MEMORY_HOOK_URL=http://127.0.0.1:49374",
-                    f"AI_MEMORY_HOOK_URL={url} AI_MEMORY_AUTH_TOKEN=$(cat {token_path})")
-                n += 1
-json.dump(d, open(p, "w"), indent=2, ensure_ascii=False)
-print(f"✓ {n} hooks apontados (backup em settings.json.bak.*)")
+        for hook in entry.get("hooks", []):
+            command = hook.get("command", "")
+            marker = "AI_MEMORY_HOOK_URL=http://127.0.0.1:49374"
+            if marker in command:
+                hook["command"] = command.replace(marker, replacement)
+                changed += 1
+
+temporary = settings_path.with_suffix(settings_path.suffix + ".tmp")
+temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+os.chmod(temporary, stat.S_IMODE(settings_path.stat().st_mode))
+os.replace(temporary, settings_path)
+print(f"✓ updated {changed} Claude Code hooks (backup: {settings_path.name}.bak.*)")
 PYEOF
   fi
 else
-  echo "– Claude Code com hooks ai-memory não detectado; pulando (veja docs/install.md §3)"
+  echo "– Claude Code ai-memory hooks not detected; skipping (see docs/install.md)."
 fi
 
-# --- 5. heartbeat ---------------------------------------------------------------
-read -rp "Ativar heartbeat horário (aparecer no painel de máquinas)? [s/N] " R
-if [ "$R" = "s" ] || [ "$R" = "S" ]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# --- 5. Hourly machine heartbeat (optional) ------------------------------------
+read -rp "Enable the hourly machine heartbeat for the status panel? [y/N] " REPLY
+if [[ "$REPLY" =~ ^[Yy]$ ]]; then
   install -Dm755 "$SCRIPT_DIR/elder-brain-status" "$HOME/.local/bin/elder-brain-status"
-  mkdir -p "$HOME/.config/systemd/user"
-  cat > "$HOME/.config/systemd/user/elder-brain-heartbeat.service" <<EOF
+  install -dm700 "$HOME/.config/systemd/user"
+
+  cat > "$HOME/.config/systemd/user/elder-brain-heartbeat.service" <<'EOF'
 [Unit]
 Description=Elder Brain heartbeat
+
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 %h/.local/bin/elder-brain-status --heartbeat
 EOF
-  cat > "$HOME/.config/systemd/user/elder-brain-heartbeat.timer" <<EOF
+
+  cat > "$HOME/.config/systemd/user/elder-brain-heartbeat.timer" <<'EOF'
 [Unit]
 Description=Hourly Elder Brain heartbeat
+
 [Timer]
 OnCalendar=hourly
 Persistent=true
+
 [Install]
 WantedBy=timers.target
 EOF
+
   systemctl --user daemon-reload
   systemctl --user enable --now elder-brain-heartbeat.timer
   systemctl --user start elder-brain-heartbeat.service
-  echo "✓ heartbeat ativo"
+  echo "✓ hourly heartbeat enabled"
 fi
 
-# --- 6. painel Omarchy (opcional) ----------------------------------------------
-if [ -d "$HOME/.config/omarchy" ]; then
-  read -rp "Instalar widget da barra Omarchy? [s/N] " R
-  if [ "$R" = "s" ] || [ "$R" = "S" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    USERNAME="$(id -un)"
-    DEST="$HOME/.config/omarchy/plugins/${USERNAME}.elder-brain"
-    cp -r "$SCRIPT_DIR/../omarchy-plugin" "$DEST"
-    sed -i "s/\"id\": \"gatsby.elder-brain\"/\"id\": \"${USERNAME}.elder-brain\"/" "$DEST/manifest.json"
-    sed -i "s/moduleName: \"gatsby.elder-brain\"/moduleName: \"${USERNAME}.elder-brain\"/; s/ipcTarget: \"gatsby.elder-brain\"/ipcTarget: \"${USERNAME}.elder-brain\"/" "$DEST/Panel.qml"
-    echo "✓ plugin em $DEST"
-    echo "  Agora adicione {\"id\": \"${USERNAME}.elder-brain\"} à seção desejada de ~/.config/omarchy/shell.json"
+# --- 6. Omarchy status panel (optional) ----------------------------------------
+if [[ -d "$HOME/.config/omarchy" ]] && command -v omarchy >/dev/null 2>&1; then
+  read -rp "Install and enable the Omarchy bar panel? [y/N] " REPLY
+  if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+    USERNAME=$(id -un)
+    PLUGIN_ID="${USERNAME}.elder-brain"
+    DEST="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
+
+    if [[ -e "$DEST" ]]; then
+      mv "$DEST" "$DEST.bak.$(date +%s)"
+    fi
+    cp -a "$SCRIPT_DIR/../omarchy-plugin" "$DEST"
+    sed -i \
+      -e "s/\"id\": \"community.elder-brain\"/\"id\": \"$PLUGIN_ID\"/" \
+      "$DEST/manifest.json"
+    sed -i \
+      -e "s/moduleName: \"community.elder-brain\"/moduleName: \"$PLUGIN_ID\"/" \
+      -e "s/ipcTarget: \"community.elder-brain\"/ipcTarget: \"$PLUGIN_ID\"/" \
+      "$DEST/Panel.qml"
+
+    omarchy plugin validate "$DEST"
+    omarchy-shell shell rescanPlugins >/dev/null
+    omarchy plugin enable "$PLUGIN_ID" --section right
+    echo "✓ Omarchy panel installed and enabled as $PLUGIN_ID"
   fi
 fi
 
 echo
-echo "🧠 pronto. Teste: elder-brain-status"
+echo "🧠 setup complete. Verify with: elder-brain-status"

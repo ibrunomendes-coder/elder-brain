@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "gatsby.elder-brain",
+  "id": "community.elder-brain",
   "name": "Elder Brain",
-  "version": "0.1.0",
-  "author": "Gatsby",
+  "version": "0.2.0",
+  "author": "Bruno Mendes",
   "license": "MIT",
-  "description": "Saúde da memória agentica coletiva (ai-memory central na tailnet): ativa, latência, contagens, máquinas conectadas e atividade recente.",
+  "description": "Health and activity panel for a shared ai-memory server: latency, counts, connected machines and recent memory.",
   "kinds": ["bar-widget"],
   "activation": "on-demand",
   "entryPoints": {
@@ -13,9 +13,9 @@
   },
   "barWidget": {
     "displayName": "Elder Brain",
-    "description": "Um cérebro na barra: verde quando a memória coletiva responde; painel com máquinas conectadas e atividade recente.",
+    "description": "Collective agent memory in the bar: server health, latency, connected machines and recent activity.",
     "category": "System",
-    "aliases": ["elder brain", "memoria", "ai-memory", "akita"],
+    "aliases": ["elder brain", "memory", "collective memory", "ai-memory", "akita"],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
@@ -25,7 +25,7 @@
       {
         "key": "refreshIntervalSec",
         "type": "integer",
-        "label": "Intervalo de atualização (segundos)",
+        "label": "Refresh interval (seconds)",
         "min": 60,
         "max": 900,
         "step": 30,

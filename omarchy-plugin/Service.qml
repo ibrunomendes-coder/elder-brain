@@ -3,8 +3,8 @@ import Quickshell
 import Quickshell.Io
 import "Model.js" as Model
 
-// Owns the plugin's data. Shells out to status.py (que detém o token e fala
-// MCP com o Elder Brain) e mantém o painel livre de credenciais.
+// Owns plugin data. status.py holds the token boundary and talks MCP to the
+// server, keeping credentials out of the QML process.
 Item {
   id: root
 
@@ -46,10 +46,10 @@ Item {
       root.refreshing = false
       if (exitCode === 0 && root._output.trim() !== "") {
         root.status = Model.parseStatus(root._output)
-        root.lastError = root.status.alive ? "" : (root.status.error || "Elder Brain sem resposta")
+        root.lastError = root.status.alive ? "" : (root.status.error || "Elder Brain is not responding")
       } else {
         root.status = Model.defaultStatus()
-        root.lastError = "status.py falhou (exit " + exitCode + ")"
+        root.lastError = "status.py failed (exit " + exitCode + ")"
       }
     }
   }

@@ -1,47 +1,67 @@
 #!/usr/bin/env python3
-"""Elder Brain status helper para o plugin Omarchy.
+"""Elder Brain status helper for the Omarchy plugin and heartbeat timer.
 
-Consulta a memória coletiva (ai-memory central na VPS Hermes) via MCP-over-HTTP
-e imprime UM objeto JSON no stdout. Só stdlib — sem pip.
+Queries a remote ai-memory server over MCP-over-HTTP and writes exactly one JSON
+object to stdout. Python standard library only; no pip dependencies.
 
-Token lido de ~/.config/elder-brain/token (nunca em config nem em disco por este
-script). Com --heartbeat, grava/atualiza a página machines/<host>.md no Elder
-Brain (é assim que o painel sabe quais máquinas estão vivas).
+The Bearer token is read from ~/.config/elder-brain/token and is never written
+by this script. With --heartbeat, the helper updates machines/<host>.md so the
+status panel can determine which client machines are alive.
 """
 
 import json
+import os
 import socket
 import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 TOKEN_FILE = Path.home() / ".config" / "elder-brain" / "token"
 URL_FILE = Path.home() / ".config" / "elder-brain" / "url"
+SCOPE_FILE = Path.home() / ".config" / "elder-brain" / "scope"
 MACHINES_FILE = Path.home() / ".config" / "elder-brain" / "machines"
 TIMEOUT = 6
 
 
 def load_url() -> str:
-    """URL do servidor: env ELDER_BRAIN_URL ou ~/.config/elder-brain/url."""
-    import os
+    """Load the server URL from ELDER_BRAIN_URL or the local config file."""
     if os.environ.get("ELDER_BRAIN_URL"):
         return os.environ["ELDER_BRAIN_URL"].rstrip("/")
     if URL_FILE.exists():
         return URL_FILE.read_text().strip().rstrip("/")
     raise RuntimeError(
-        "URL não configurada: defina ELDER_BRAIN_URL ou escreva "
-        "~/.config/elder-brain/url (ex.: http://100.x.y.z:49374)"
+        "server URL is not configured: set ELDER_BRAIN_URL or write "
+        "~/.config/elder-brain/url (for example: http://<PRIVATE_IP>:49374)"
     )
 
 
+def load_scope() -> dict:
+    """Load the canonical workspace/project scope from env or local config."""
+    value = os.environ.get("ELDER_BRAIN_SCOPE", "").strip()
+    if not value and SCOPE_FILE.exists():
+        value = SCOPE_FILE.read_text().strip()
+    if not value:
+        return {}
+    parts = value.split("/", 1)
+    if len(parts) != 2 or not all(part.strip() for part in parts):
+        raise RuntimeError(
+            "invalid scope: use workspace/project in ELDER_BRAIN_SCOPE "
+            "or ~/.config/elder-brain/scope"
+        )
+    return {"workspace": parts[0].strip(), "project": parts[1].strip()}
+
+
 def known_machines() -> list:
-    """Máquinas da colônia: ~/.config/elder-brain/machines (uma por linha)."""
+    """Load colony hostnames from ~/.config/elder-brain/machines."""
     if MACHINES_FILE.exists():
-        return [l.strip() for l in MACHINES_FILE.read_text().splitlines()
-                if l.strip() and not l.startswith("#")]
+        return [
+            line.strip()
+            for line in MACHINES_FILE.read_text().splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
     return [socket.gethostname().lower()]
 
 
@@ -50,13 +70,15 @@ def load_token() -> str:
 
 
 def mcp_call(tool: str, args: dict, token: str, url: str) -> dict:
-    body = json.dumps({
-        "jsonrpc": "2.0",
-        "id": int(time.time() * 1000),
-        "method": "tools/call",
-        "params": {"name": tool, "arguments": args},
-    }).encode()
-    req = urllib.request.Request(
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": int(time.time() * 1000),
+            "method": "tools/call",
+            "params": {"name": tool, "arguments": args},
+        }
+    ).encode()
+    request = urllib.request.Request(
         f"{url}/mcp",
         data=body,
         headers={
@@ -66,17 +88,23 @@ def mcp_call(tool: str, args: dict, token: str, url: str) -> dict:
         },
     )
     started = time.monotonic()
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-        raw = resp.read().decode()
+    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+        raw = response.read().decode()
     latency_ms = int((time.monotonic() - started) * 1000)
-    # Resposta pode ser JSON direto ou SSE (linhas "data: {...}").
+
+    # MCP responses may be direct JSON or SSE (`data: {...}`).
     if raw.lstrip().startswith("{"):
         payload = json.loads(raw)
     else:
-        line = next((l for l in raw.splitlines() if l.startswith("data:")), "data: {}")
+        line = next(
+            (line for line in raw.splitlines() if line.startswith("data:")),
+            "data: {}",
+        )
         payload = json.loads(line[5:].strip())
+
     if payload.get("error"):
-        raise RuntimeError(payload["error"].get("message", "erro MCP"))
+        raise RuntimeError(payload["error"].get("message", "MCP error"))
+
     text = (payload.get("result", {}).get("content") or [{}])[0].get("text", "")
     try:
         inner = json.loads(text)
@@ -86,31 +114,40 @@ def mcp_call(tool: str, args: dict, token: str, url: str) -> dict:
     return inner
 
 
-def heartbeat(token: str, url: str) -> None:
+def heartbeat(token: str, url: str, scope: dict) -> None:
     host = socket.gethostname().lower()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    mcp_call("memory_write_page", {
+    args = {
         "path": f"machines/{host}.md",
-        "body": f"# {host}\n\n- **last_seen:** {now}\n- **agente:** heartbeat elder-brain-status\n",
-    }, token, url)
+        "body": f"# {host}\n\n- **last_seen:** {now}\n- **agent:** elder-brain-status heartbeat\n",
+        **scope,
+    }
+    mcp_call("memory_write_page", args, token, url)
 
 
-def machine_states(token: str, url: str) -> list:
+def machine_states(token: str, url: str, scope: dict) -> list:
     states = []
     now = datetime.now(timezone.utc)
     for name in known_machines():
         entry = {"name": name, "alive": False, "last_seen": None, "age_min": None}
         try:
-            page = mcp_call("memory_read_page", {"path": f"machines/{name}.md"}, token, url)
+            page = mcp_call(
+                "memory_read_page",
+                {"path": f"machines/{name}.md", **scope},
+                token,
+                url,
+            )
             content = page.get("body") or page.get("content") or page.get("raw") or ""
             for line in content.splitlines():
                 if "last_seen:" in line:
-                    ts = line.split("last_seen:", 1)[1].strip().strip("*").strip()
-                    seen = datetime.fromisoformat(ts)
-                    entry["last_seen"] = ts
+                    timestamp = line.split("last_seen:", 1)[1].strip().strip("*").strip()
+                    seen = datetime.fromisoformat(timestamp)
+                    entry["last_seen"] = timestamp
                     entry["age_min"] = round((now - seen).total_seconds() / 60, 1)
                     entry["alive"] = entry["age_min"] < 90
         except Exception:
+            # A missing or malformed heartbeat marks only that machine offline;
+            # it must not make the entire status request fail.
             pass
         states.append(entry)
     return states
@@ -120,34 +157,48 @@ def main() -> None:
     try:
         url = load_url()
         token = load_token()
+        scope = load_scope()
     except Exception as exc:
         print(json.dumps({"ok": False, "alive": False, "error": str(exc)}))
         return
 
     if "--heartbeat" in sys.argv:
         try:
-            heartbeat(token, url)
+            heartbeat(token, url, scope)
             print(json.dumps({"ok": True, "heartbeat": socket.gethostname().lower()}))
         except Exception as exc:
             print(json.dumps({"ok": False, "error": str(exc)}))
         return
 
-    out = {"ok": True, "alive": False, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    output = {
+        "ok": True,
+        "alive": False,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
     try:
-        status = mcp_call("memory_status", {}, token, url)
-        out["alive"] = True
-        out["latency_ms"] = status.pop("_latency_ms", None)
-        out["counts"] = status.get("counts", {})
-        recent = mcp_call("memory_recent", {"limit": 6}, token, url)
-        out["recent"] = [
-            {"title": h.get("title", ""), "path": h.get("path", "")}
-            for h in recent.get("hits", [])[:6]
+        status = mcp_call("memory_status", scope, token, url)
+        output["alive"] = True
+        output["latency_ms"] = status.pop("_latency_ms", None)
+        output["counts"] = status.get("counts", {})
+
+        # Heartbeats are infrastructure, not meaningful recent memory activity.
+        # Fetch extra rows so six content entries remain after filtering.
+        recent = mcp_call("memory_recent", {"limit": 12, **scope}, token, url)
+        meaningful = [
+            hit
+            for hit in recent.get("hits", [])
+            if not str(hit.get("path", "")).startswith("machines/")
         ]
-        out["machines"] = machine_states(token, url)
+        output["recent"] = [
+            {"title": hit.get("title", ""), "path": hit.get("path", "")}
+            for hit in meaningful[:6]
+        ]
+        output["machines"] = machine_states(token, url, scope)
     except (urllib.error.URLError, RuntimeError, TimeoutError, OSError) as exc:
-        out["ok"] = False
-        out["error"] = str(exc)
-    print(json.dumps(out, ensure_ascii=False))
+        output["ok"] = False
+        output["error"] = str(exc)
+
+    print(json.dumps(output, ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,21 @@
+# Secrets and local deployment state
 .env
+.env.local
+
+# ai-memory durable data
+/data/
+/deploy/data/
+*.sqlite
+*.sqlite3
+*.db
+
+# Python/runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+
+# Local backups and OS metadata
 *.bak
+*.bak.*
 .DS_Store
