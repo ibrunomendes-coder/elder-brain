@@ -1,0 +1,24 @@
+services:
+  elder-brain:
+    image: akitaonrails/ai-memory:latest
+    container_name: elder-brain
+    user: "1000:1000"
+    command: ["serve", "--transport", "http", "--bind", "0.0.0.0:49374", "--enable-web"]
+    environment:
+      AI_MEMORY_DATA_DIR: /data
+      # Obrigatório: sem token o servidor recusa bind não-loopback.
+      AI_MEMORY_AUTH_TOKEN: ${AI_MEMORY_AUTH_TOKEN}
+      # Hosts aceitos no header Host. Inclua o IP/DNS pelo qual os clientes chegam.
+      AI_MEMORY_ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,::1}
+      # Opcional mas recomendado: consolidação/embeddings via LLM.
+      AI_MEMORY_LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      AI_MEMORY_EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-gemini}
+      AI_MEMORY_LLM_MODEL: ${LLM_MODEL:-gemini-2.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    ports:
+      # PUBLICAR SÓ NUMA REDE PRIVADA (tailnet/VPN/LAN). Nunca exponha na
+      # internet pública sem TLS + proxy reverso.
+      - "${BIND_IP:-127.0.0.1}:49374:49374"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
