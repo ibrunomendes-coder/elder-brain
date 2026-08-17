@@ -1,90 +1,140 @@
-# Elder Brain 🧠
+<div align="center">
 
-**Memória coletiva para agentes de IA** — um servidor central, agnóstico de
-agente e self-hosted, do qual qualquer agente em qualquer máquina lê e escreve
-experiências de sessão. O que um Claude aprendeu no desktop, o Pi no laptop já
-sabe. Um organismo vivo de memória, seu, fora de qualquer vendor.
+<img src="assets/logo.png" width="140" alt="Elder Brain"/>
 
-Construído sobre o [`akitaonrails/ai-memory`](https://github.com/akitaonrails/ai-memory)
-(MCP-over-HTTP). Este repositório é a **receita completa**: servidor Docker,
-integrações por agente, heartbeat de máquinas e painel de status para Omarchy.
+# Elder Brain
 
-## Por quê
+**Collective memory for AI agents** — one self-hosted server that every agent,
+on every machine, reads from and writes to.
 
-Agentes de IA acumulam experiência por sessão — decisões, correções, contexto.
-Por padrão essa memória morre na máquina onde nasceu. O Elder Brain centraliza:
+[![License: MIT](https://img.shields.io/badge/license-MIT-2b2b2b)](LICENSE)
+[![Protocol](https://img.shields.io/badge/protocol-MCP--over--HTTP-4a3f35)](https://modelcontextprotocol.io)
+[![Deploy](https://img.shields.io/badge/deploy-docker--compose-4a3f35)](deploy/)
+
+[Português (Brasil)](README.pt-BR.md)
+
+</div>
+
+What one Claude learns on your desktop, the agent on your laptop already knows.
+A living memory organism — yours, on your infrastructure, outside any vendor.
+
+<div align="center">
+<img src="assets/panel-omarchy.png" width="380" alt="Elder Brain status panel for Omarchy — health, latency, page/session/observation counts, connected machines and recent activity (UI shown in pt-BR)"/>
+<br/><sub>The Omarchy status panel: health, latency, counts, connected machines, recent activity.</sub>
+</div>
+
+## Why
+
+AI agents accumulate experience every session — decisions, corrections, hard-won
+context. By default that memory dies on the machine where it was born. Elder
+Brain centralizes it:
 
 ```
 laptop ──┐
-desktop ─┼─→  elder-brain (sua VPS, rede privada)  ←── qualquer máquina futura
-CI ──────┘      1 token Bearer + 1 URL = mesma memória viva em todos
+desktop ─┼─→  elder-brain (your VPS, private network)  ←── any future machine
+CI ──────┘        one Bearer token + one URL = the same living memory everywhere
 ```
 
-- **Agnóstico**: fala MCP-over-HTTP — Claude Code, Pi, Codex, scripts, qualquer cliente MCP
-- **Self-hosted**: um container Docker; dados em SQLite + Markdown, seus
-- **Seguro por desenho**: bind em rede privada (tailnet/LAN) + token obrigatório
-- **Observável**: painel de barra mostra saúde, latência e máquinas conectadas
+- **Agent-agnostic** — speaks MCP-over-HTTP: Claude Code, Pi, Codex, scripts, any MCP client
+- **Self-hosted** — one Docker container; data is SQLite + Markdown, on your disk
+- **Private by design** — binds to a private network (Tailscale/VPN/LAN) and refuses to run without an auth token
+- **Observable** — a status bar panel shows health, latency and which machines are alive
+
+Elder Brain is a **distribution, not a fork**: it deploys the excellent
+[`akitaonrails/ai-memory`](https://github.com/akitaonrails/ai-memory) server
+unmodified, and adds everything around it — deployment recipe, multi-machine
+conventions, client installer, status CLI and the Omarchy panel.
 
 ## Quickstart
 
-### 1. Servidor (qualquer host Linux com Docker)
+### 1. Server (any Linux host with Docker)
 
 ```bash
-cp deploy/.env.example deploy/.env   # preencha: token, BIND_IP, GEMINI_API_KEY
+cp deploy/.env.example deploy/.env   # fill in: token, BIND_IP, GEMINI_API_KEY
 cd deploy && docker compose up -d
 
-# valide: sem token deve dar 401, com token deve abrir
+# validate: no token must give 401, with token it opens
 curl -i http://<BIND_IP>:49374/web/
 curl -i -H "Authorization: Bearer <TOKEN>" http://<BIND_IP>:49374/web/
 ```
 
-> ⚠️ Publique **somente em rede privada** (Tailscale, VPN, LAN). Para exposição
-> pública, coloque atrás de proxy com TLS — veja `docs/security.md`.
+> ⚠️ Publish **only on a private network** (Tailscale, WireGuard, LAN). For
+> public exposure put a TLS reverse proxy in front — see [docs/security.md](docs/security.md).
 
-### 2. Cada máquina cliente
+### 2. Each client machine
 
 ```bash
 ./scripts/install.sh
-# interativo: pede URL + token, configura hooks do Claude Code,
-# heartbeat e (opcional) o painel Omarchy
+# interactive: asks URL + token, wires Claude Code hooks,
+# heartbeat and (optionally) the Omarchy panel
 ```
 
-Ou manualmente — guia completo em **[docs/install.md](docs/install.md)**.
+Manual path: **[docs/install.md](docs/install.md)**.
 
-### 3. Verifique
+### 3. Verify
 
 ```bash
 elder-brain-status
 # {"ok": true, "alive": true, "latency_ms": 34, "counts": {...}, "machines": [...]}
 ```
 
-## Componentes
+## Scope routing — read this before your second machine
 
-| Pasta | O que é |
+Hooks route each event by walking up from the session's working directory
+looking for a `.ai-memory.toml` marker. **No marker means the server buckets
+your memory by folder name and your colony silently fragments.** Pin one
+canonical scope everywhere:
+
+```toml
+# ~/.ai-memory.toml  (and at the root of every work tree OUTSIDE $HOME)
+workspace = "default"
+project   = "your-name"
+```
+
+Rule of thumb: every work root that is not under `$HOME` (e.g. `/mnt/storage`)
+needs its own marker. A marker dropped in a synced folder (Dropbox root, etc.)
+propagates to the whole colony for free. Routing is evaluated **per event**, so
+a running session migrates to the right bucket the moment the marker appears.
+
+## What's in the box
+
+| Path | What it is |
 |---|---|
-| `deploy/` | Docker Compose do servidor |
-| `scripts/elder-brain-status` | CLI de status (stdlib Python): saúde, contagens, máquinas, atividade recente |
-| `scripts/install.sh` | Instalador interativo de máquina cliente |
-| `omarchy-plugin/` | Widget de barra para [Omarchy](https://omarchy.org): ícone vivo/morto, latência, máquinas conectadas, atividade recente |
-| `docs/` | Guias: instalação detalhada, segurança, como funciona |
+| `deploy/` | Docker Compose for the server (parameterized, private-bind, token required) |
+| `scripts/install.sh` | Interactive client-machine installer |
+| `scripts/elder-brain-status` | Status CLI (Python stdlib only): health, counts, machines, recent activity |
+| `omarchy-plugin/` | Status bar panel for [Omarchy](https://omarchy.org) — live icon, latency, machines, activity |
+| `docs/` | Install guide, security model, runbook |
 
-## Como os agentes se conectam
+## How agents connect
 
-| Agente | Integração |
+| Agent | Integration |
 |---|---|
-| **Claude Code** | Hooks de lifecycle (`session-start`, `post-tool-use`, `pre-compact`…) apontados pro servidor via `AI_MEMORY_HOOK_URL` + `AI_MEMORY_AUTH_TOKEN` |
-| **Pi** | Extensão com tools de recall/recent/status (MCP-over-HTTP) |
-| **Qualquer MCP client** | `POST /mcp` com `Authorization: Bearer <token>` |
+| **Claude Code** | Lifecycle hooks (`session-start`, `post-tool-use`, `pre-compact`…) pointed at the server via `AI_MEMORY_HOOK_URL` + `AI_MEMORY_AUTH_TOKEN` |
+| **Pi** | Extension with recall/recent/status tools (MCP-over-HTTP) |
+| **Any MCP client** | `POST /mcp` with `Authorization: Bearer <token>` |
 
-## Modelo de segurança
+Machines announce themselves with an hourly heartbeat (a `machines/<host>.md`
+page) — that is how the panel knows who is alive.
 
-- Servidor **recusa** bind não-loopback sem `AI_MEMORY_AUTH_TOKEN` (guarda nativa do ai-memory)
-- Token por máquina em `~/.config/elder-brain/token` (chmod 600) — nunca em repo
-- Tráfego dentro da sua overlay network (Tailscale recomendada)
-- Este repositório não contém nenhum dado, IP ou credencial real — configure via `.env`
+## Security & privacy
 
-## Licença
+Short version — the full model lives in [docs/security.md](docs/security.md):
 
-MIT — veja [LICENSE](LICENSE). O servidor subjacente
-[`ai-memory`](https://github.com/akitaonrails/ai-memory) é de AkitaOnRails e tem
-licença própria.
+- The server **refuses** a non-loopback bind without `AI_MEMORY_AUTH_TOKEN`; whoever holds the token reads and writes the whole memory. Treat it as a master password, rotate it from the server `.env`.
+- Session **content flows to your server** — and, if you enable LLM consolidation/embeddings, to that LLM provider too. If your sessions touch sensitive work, use a paid API tier (whose terms exclude training) or a local provider.
+- Keep secrets out of agent sessions; anything an agent sees can end up in memory.
+- Back up the data dir (`SQLite + Markdown`) — and **encrypt before shipping offsite** (e.g. `age` + rclone).
+
+## Status
+
+v0.1 — running in production on the author's fleet (desktop + laptop + VPS,
+Tailscale mesh, ~60k observations). The recipe is small on purpose: read it in
+one sitting, deploy in one evening.
+
+## Credits & license
+
+Built on [`ai-memory`](https://github.com/akitaonrails/ai-memory) by
+[AkitaOnRails](https://github.com/akitaonrails) (its own license applies to the
+server). The Cthulhu medallion artwork is third-party and **not** covered by the MIT license. Everything else in this repository — recipe, scripts, panel — is
+[MIT](LICENSE).
